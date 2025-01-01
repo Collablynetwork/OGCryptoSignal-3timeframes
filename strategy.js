@@ -11,7 +11,7 @@ const BUY_SIGNAL_LOG_FILE = './buy_signals.csv';
 const RSI_PERIOD = 14;
 const RSI_THRESHOLD_15m = 15;
 const RSI_THRESHOLD_5m = 15;
-const RSI_THRESHOLD_1m = 25;
+const RSI_THRESHOLD_1m =25;
 
 // Global trackers
 const lastNotificationTimes = {};
@@ -49,10 +49,10 @@ const calculateRSI = (prices, period = RSI_PERIOD) => {
   const avgGain = gains / period;
   const avgLoss = losses / period;
 
-  if (avgLoss === 0) return 150;
+  if (avgLoss === 0) return 100;
 
   const rs = avgGain / avgLoss;
-  return 150 - 150 / (1 + rs);
+  return 100 - 100 / (1 + rs);
 };
 
 // Fetch candlestick data
@@ -117,7 +117,7 @@ const calculateBTCChanges = async () => {
   // Calculate immediate change
   let priceChange = null;
   if (lastBTCPrice) {
-    priceChange = ((currentBTCPrice - lastBTCPrice) / lastBTCPrice * 150).toFixed(2);
+    priceChange = ((currentBTCPrice - lastBTCPrice) / lastBTCPrice * 100).toFixed(2);
   }
 
   // Calculate 30-minute change
@@ -126,7 +126,7 @@ const calculateBTCChanges = async () => {
     const thirtyMinutesAgo = moment().subtract(30, 'minutes');
     const oldPrice = btcPriceHistory.find((entry) => entry.timestamp.isSameOrBefore(thirtyMinutesAgo));
     if (oldPrice) {
-      priceChange30m = ((currentBTCPrice - oldPrice.price) / oldPrice.price * 150).toFixed(2);
+      priceChange30m = ((currentBTCPrice - oldPrice.price) / oldPrice.price * 100).toFixed(2);
     }
   }
 
@@ -154,10 +154,10 @@ const logBuySignal = (symbol, rsi15m, rsi5m, rsi1m, buyPrice, sellPrice, duratio
   const timestamp = moment().format('YYYY-MM-DD HH:mm:ss');
   const logData = `${timestamp},${symbol},${rsi15m},${rsi5m},${rsi1m},${buyPrice},${sellPrice},${duration},${bottomPrice},${percentageDrop},${btcChange},${btcChange30m}\n`;
 
- // fs.appendFile(BUY_SIGNAL_LOG_FILE, logData, (err) => {
- //   if (err) console.error('Error writing to buy_signals.csv:', err);
- //   else console.log(`Logged Buy Signal for ${symbol}`);
- // });
+//  fs.appendFile(BUY_SIGNAL_LOG_FILE, logData, (err) => {
+//    if (err) console.error('Error writing to buy_signals.csv:', err);
+//    else console.log(`Logged Buy Signal for ${symbol}`);
+//  });
 };
 
 // Handle RSI logic
@@ -183,22 +183,20 @@ export const handleRSI = async (symbol, token, chatIds) => {
     const currentTime = moment();
     const lastNotificationTime = lastNotificationTimes[symbol];
 
-    if (lastNotificationTime && currentTime.diff(lastNotificationTime, 'minutes') < 15) return;
+    if (lastNotificationTime && currentTime.diff(lastNotificationTime, 'minutes') < 5) return;
 
     lastNotificationTimes[symbol] = currentTime;
 
-    const buyRangeMin = (currentPrice * 0.99).toFixed(8);
-    const buyRangeMax = currentPrice.toFixed(8);
     const sellPrice = (currentPrice * 1.011).toFixed(8);
 
     const btcInfo = btcData.price
       ? `\n💲 BTC Price: $${btcData.price.toFixed(2)}${btcData.change ? ` (${btcData.change > 0 ? '+' : ''}${btcData.change}%)` : ''}${btcData.change30m ? `\n📊 BTC 30m Change: ${btcData.change30m > 0 ? '+' : ''}${btcData.change30m}%` : ''}`
       : '';
 
-const message = `
+    const message = `
 📢 **Buy Signal**
 💎 Token: #${symbol}
-💰 Buy Range: ${buyRangeMin} - ${buyRangeMax}
+💰 Buy Price: ${currentPrice}
 💰 Sell Price: ${sellPrice}
 🕒 Timeframes: 1m${btcInfo}
 💹 Trade Now on: [Binance](https://www.binance.com/en/trade/${symbol})
@@ -242,10 +240,10 @@ export const checkTargetAchieved = async (token, chatIds) => {
       const period = `${duration.hours()}h ${duration.minutes()}m ${duration.seconds()}s`;
 
       const bottomPrice = bottomPrices[symbol];
-      const percentageDrop = (((buyPrice - bottomPrice) / buyPrice) * 150).toFixed(2);
+      const percentageDrop = (((buyPrice - bottomPrice) / buyPrice) * 100).toFixed(2);
 
       const btcChange = btcPriceAtBuy && btcData.price
-        ? ((btcData.price - btcPriceAtBuy) / btcPriceAtBuy * 150).toFixed(2)
+        ? ((btcData.price - btcPriceAtBuy) / btcPriceAtBuy * 100).toFixed(2)
         : null;
 
       const btcInfo = btcData.price
