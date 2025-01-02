@@ -9,7 +9,7 @@ const BUY_SIGNAL_LOG_FILE = './buy_signals.csv';
 
 // Global constants
 const RSI_PERIOD = 14;
-const RSI_THRESHOLD_15m = 15;
+const RSI_THRESHOLD_15m = 10;
 const RSI_THRESHOLD_5m = 15;
 const RSI_THRESHOLD_1m =25;
 
@@ -178,7 +178,7 @@ export const handleRSI = async (symbol, token, chatIds) => {
   // Log RSI and price data
   logRSIAndPrice(symbol, rsi15m, rsi5m, rsi1m, currentPrice);
 
-  // Check for buy signal: 15m RSI < 15, 5m RSI > 15, 1m RSI > 25
+  // Check for buy signal: 15m RSI < 10, 5m RSI > 15, 1m RSI > 25
   if (rsi15m < RSI_THRESHOLD_15m && rsi5m > RSI_THRESHOLD_5m && rsi1m > RSI_THRESHOLD_1m) {
     const currentTime = moment();
     const lastNotificationTime = lastNotificationTimes[symbol];
