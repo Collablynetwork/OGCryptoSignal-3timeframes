@@ -183,7 +183,7 @@ export const handleRSI = async (symbol, token, chatIds) => {
     const currentTime = moment();
     const lastNotificationTime = lastNotificationTimes[symbol];
 
-    if (lastNotificationTime && currentTime.diff(lastNotificationTime, 'minutes') < 5) return;
+    if (lastNotificationTime && currentTime.diff(lastNotificationTime, 'minutes') < 30) return;
 
     lastNotificationTimes[symbol] = currentTime;
 
