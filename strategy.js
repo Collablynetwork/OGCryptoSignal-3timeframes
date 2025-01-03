@@ -11,12 +11,13 @@ const BUY_SIGNAL_LOG_FILE = './buy_signals.csv';
 const RSI_PERIOD = 14;
 const RSI_THRESHOLD_15m = 10;
 const RSI_THRESHOLD_5m = 15;
-const RSI_THRESHOLD_1m =25;
+const RSI_THRESHOLD_1m = 25;
 
 // Global trackers
 const lastNotificationTimes = {};
 const sellPrices = {};
 const bottomPrices = {};
+const entryPrices = {}; // Tracks multiple entry prices for each symbol
 let lastBTCPrice = null;
 const btcPriceHistory = [];
 
@@ -79,7 +80,7 @@ const fetchAndCalculateRSI = async (symbol, interval) => {
   return prices ? calculateRSI(prices) : null;
 };
 
-// Fetch 4-hour RSI
+// Fetch 15-minute RSI
 const fetch15mRSI = async (symbol) => fetchAndCalculateRSI(symbol, '15m');
 
 // Fetch current BTC price and maintain history
@@ -154,13 +155,13 @@ const logBuySignal = (symbol, rsi15m, rsi5m, rsi1m, buyPrice, sellPrice, duratio
   const timestamp = moment().format('YYYY-MM-DD HH:mm:ss');
   const logData = `${timestamp},${symbol},${rsi15m},${rsi5m},${rsi1m},${buyPrice},${sellPrice},${duration},${bottomPrice},${percentageDrop},${btcChange},${btcChange30m}\n`;
 
-//  fs.appendFile(BUY_SIGNAL_LOG_FILE, logData, (err) => {
-//    if (err) console.error('Error writing to buy_signals.csv:', err);
-//    else console.log(`Logged Buy Signal for ${symbol}`);
-//  });
+  fs.appendFile(BUY_SIGNAL_LOG_FILE, logData, (err) => {
+    if (err) console.error('Error writing to buy_signals.csv:', err);
+    else console.log(`Logged Buy Signal for ${symbol}`);
+  });
 };
 
-// Handle RSI logic
+// Handle RSI logic with multiple entry points
 export const handleRSI = async (symbol, token, chatIds) => {
   const rsi15m = await fetch15mRSI(symbol);
   const prices5m = await fetchCandlestickData(symbol, '5m');
@@ -178,7 +179,31 @@ export const handleRSI = async (symbol, token, chatIds) => {
   // Log RSI and price data
   logRSIAndPrice(symbol, rsi15m, rsi5m, rsi1m, currentPrice);
 
-  // Check for buy signal: 15m RSI < 10, 5m RSI > 15, 1m RSI > 25
+  // Check for an existing signal
+  const existingSignal = sellPrices[symbol];
+  if (existingSignal) {
+    if (
+      currentPrice < existingSignal.sellPrice &&
+      (entryPrices[symbol].length === 0 || currentPrice <= entryPrices[symbol][0] * 0.99)
+    ) {
+      entryPrices[symbol].unshift(currentPrice);
+
+      const updatedMessage = `
+📢 **Buy Signal**
+💎 Token: #${symbol}
+💰 Entry Prices: ${entryPrices[symbol].join('-')}
+💰 Sell Price: ${existingSignal.sellPrice}
+🕒 Timeframes: 1m
+💹 Trade Now on: [Binance](https://www.binance.com/en/trade/${symbol})
+`;
+
+      for (const chatId of chatIds) {
+        await editTelegramMessage(token, chatId, existingSignal.messageId, updatedMessage);
+      }
+    }
+    return;
+  }
+
   if (rsi15m < RSI_THRESHOLD_15m && rsi5m > RSI_THRESHOLD_5m && rsi1m > RSI_THRESHOLD_1m) {
     const currentTime = moment();
     const lastNotificationTime = lastNotificationTimes[symbol];
@@ -187,41 +212,42 @@ export const handleRSI = async (symbol, token, chatIds) => {
 
     lastNotificationTimes[symbol] = currentTime;
 
-    const sellPrice = (currentPrice * 1.011).toFixed(8);
+    if (!entryPrices[symbol]) entryPrices[symbol] = [];
+    if (entryPrices[symbol].length === 0 || currentPrice <= entryPrices[symbol][0] * 0.99) {
+      entryPrices[symbol].unshift(currentPrice);
+    }
 
-    const btcInfo = btcData.price
-      ? `\n💲 BTC Price: $${btcData.price.toFixed(2)}${btcData.change ? ` (${btcData.change > 0 ? '+' : ''}${btcData.change}%)` : ''}${btcData.change30m ? `\n📊 BTC 30m Change: ${btcData.change30m > 0 ? '+' : ''}${btcData.change30m}%` : ''}`
-      : '';
-
+    const sellPrice = (entryPrices[symbol][0] * 1.011).toFixed(8);
     const message = `
 📢 **Buy Signal**
 💎 Token: #${symbol}
-💰 Buy Price: ${currentPrice}
+💰 Entry Prices: ${entryPrices[symbol].join('-')}
 💰 Sell Price: ${sellPrice}
-🕒 Timeframes: 1m${btcInfo}
+🕒 Timeframes: 1m
 💹 Trade Now on: [Binance](https://www.binance.com/en/trade/${symbol})
 `;
 
-    // Send messages to all chat IDs
+    const messageIds = [];
     for (const chatId of chatIds) {
-      await sendTelegramMessage(token, chatId, message);
+      const messageId = await sendTelegramMessage(token, chatId, message);
+      messageIds.push(messageId);
     }
 
-    // Track sell and bottom prices
     sellPrices[symbol] = {
-      buyPrice: currentPrice,
+      entryPrices: entryPrices[symbol],
       sellPrice,
+      messageId: messageIds[0],
       buyTime: currentTime,
       btcPriceAtBuy: btcData.price,
     };
-    bottomPrices[symbol] = currentPrice; // Initialize bottom price
+    bottomPrices[symbol] = currentPrice;
   }
 };
 
 // Check if sell target is achieved
 export const checkTargetAchieved = async (token, chatIds) => {
   for (const symbol in sellPrices) {
-    const { sellPrice, buyPrice, buyTime, btcPriceAtBuy } = sellPrices[symbol];
+    const { sellPrice, entryPrices, messageId, buyTime } = sellPrices[symbol];
     const prices = await fetchCandlestickData(symbol, '1m');
     const btcData = await calculateBTCChanges();
 
@@ -229,50 +255,54 @@ export const checkTargetAchieved = async (token, chatIds) => {
 
     const currentPrice = prices[prices.length - 1];
 
-    // Update bottom price
     if (currentPrice < bottomPrices[symbol]) {
       bottomPrices[symbol] = currentPrice;
     }
 
-    // Check if sell target is reached
     if (currentPrice >= sellPrice) {
       const duration = moment.duration(moment().diff(buyTime));
       const period = `${duration.hours()}h ${duration.minutes()}m ${duration.seconds()}s`;
 
       const bottomPrice = bottomPrices[symbol];
-      const percentageDrop = (((buyPrice - bottomPrice) / buyPrice) * 100).toFixed(2);
+      const percentageDrop = (((entryPrices[0] - bottomPrice) / entryPrices[0]) * 100).toFixed(2);
 
-      const btcChange = btcPriceAtBuy && btcData.price
-        ? ((btcData.price - btcPriceAtBuy) / btcPriceAtBuy * 100).toFixed(2)
+      const btcChange = btcData.price
+        ? ((btcData.price - sellPrices[symbol].btcPriceAtBuy) / sellPrices[symbol].btcPriceAtBuy * 100).toFixed(2)
         : null;
-
-      const btcInfo = btcData.price
-        ? `\n₿  BTC Price: $${btcData.price.toFixed(2)}${btcChange ? ` (${btcChange > 0 ? '+' : ''}${btcChange}%)` : ''}${btcData.change30m ? `\n📊 BTC 30m Change: ${btcData.change30m > 0 ? '+' : ''}${btcData.change30m}%` : ''}`
-        : '';
 
       const newMessage = `
 📢 **Buy Signal**
 💎 Token: #${symbol}
-💰 Buy Price: ${buyPrice}
+💰 Entry Prices: ${entryPrices.join('-')}
 💰 Sell Price: ${sellPrice}
 📉 Bottom Price: ${bottomPrice}
-📉 Percentage Drop: ${percentageDrop}%${btcInfo}
+📉 Percentage Drop: ${percentageDrop}%
 ✅ Target Achieved
 ⏱️ Duration: ${period}
-💹 Traded on: [Binance](https://www.binance.com/en/trade/${symbol})
+💹 Trade Now on: [Binance](https://www.binance.com/en/trade/${symbol})
 `;
 
-      // Send updates to all chat IDs
       for (const chatId of chatIds) {
-        await editTelegramMessage(token, chatId, sellPrices[symbol].messageId, newMessage);
+        await editTelegramMessage(token, chatId, messageId, newMessage);
       }
 
-      // Log buy signal
-      logBuySignal(symbol, RSI_THRESHOLD_15m, RSI_THRESHOLD_5m, RSI_THRESHOLD_1m, buyPrice, sellPrice, period, bottomPrice, percentageDrop, btcChange, btcData.change30m);
+      logBuySignal(
+        symbol,
+        RSI_THRESHOLD_15m,
+        RSI_THRESHOLD_5m,
+        RSI_THRESHOLD_1m,
+        entryPrices[0],
+        sellPrice,
+        period,
+        bottomPrice,
+        percentageDrop,
+        btcChange,
+        btcData.change30m
+      );
 
-      // Cleanup
       delete sellPrices[symbol];
       delete bottomPrices[symbol];
+      delete entryPrices[symbol];
     }
   }
 };
