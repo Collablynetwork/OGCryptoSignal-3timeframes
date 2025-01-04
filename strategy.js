@@ -1,5 +1,4 @@
 import axios from 'axios';
-import axiosRetry from 'axios-retry';
 import moment from 'moment';
 import { sendTelegramMessage, editTelegramMessage } from './telegram.js';
 import fs from 'fs';
@@ -13,18 +12,12 @@ const RSI_PERIOD = 14;
 const RSI_THRESHOLD_15m = 10;
 const RSI_THRESHOLD_5m = 15;
 const RSI_THRESHOLD_1m = 25;
-const API_RETRIES = 3; // Retry attempts for API calls
-const API_TIMEOUT = 5000; // API timeout in milliseconds
-
-// Configure Axios with retry logic
-axiosRetry(axios, { retries: API_RETRIES });
-axios.defaults.timeout = API_TIMEOUT;
 
 // Global trackers
 const lastNotificationTimes = {};
 const sellPrices = {};
 const bottomPrices = {};
-const entryPrices = {};
+const entryPrices = {}; // Tracks multiple entry prices for each symbol
 let lastBTCPrice = null;
 const btcPriceHistory = [];
 
@@ -41,24 +34,6 @@ const initializeLogFiles = () => {
   }
 };
 initializeLogFiles();
-
-// Retry API calls
-const retryApiCall = async (fn, retries = API_RETRIES) => {
-  for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      if (error.code === 'ECONNRESET') {
-        console.error('Connection reset by peer. Retry after some time.');
-      }
-      if (attempt === retries) {
-        console.error('API call failed after retries:', error);
-        return null;
-      }
-      console.warn(`Retrying API call (${attempt}/${retries})...`);
-    }
-  }
-};
 
 // Function to calculate RSI
 const calculateRSI = (prices, period = RSI_PERIOD) => {
@@ -83,7 +58,7 @@ const calculateRSI = (prices, period = RSI_PERIOD) => {
 
 // Fetch candlestick data
 const fetchCandlestickData = async (symbol, interval) => {
-  return retryApiCall(async () => {
+  try {
     const url = `https://api.binance.com/api/v3/klines`;
     const params = {
       symbol,
@@ -93,7 +68,10 @@ const fetchCandlestickData = async (symbol, interval) => {
 
     const response = await axios.get(url, { params });
     return response.data.map((candle) => parseFloat(candle[4])); // Closing prices
-  });
+  } catch (error) {
+    console.error(`Error fetching ${interval} data for ${symbol}:`, error);
+    return null;
+  }
 };
 
 // Fetch and calculate RSI for a specific interval
@@ -107,25 +85,29 @@ const fetch15mRSI = async (symbol) => fetchAndCalculateRSI(symbol, '15m');
 
 // Fetch current BTC price and maintain history
 const fetchBTCPrice = async () => {
-  return retryApiCall(async () => {
+  try {
     const response = await axios.get('https://api.binance.com/api/v3/ticker/price', {
       params: { symbol: 'BTCUSDT' },
     });
     const price = parseFloat(response.data.price);
 
+    // Add price to history with timestamp
     btcPriceHistory.push({
       price,
       timestamp: moment(),
     });
 
-    // Keep only last 31 minutes of history
+    // Keep only last 31 minutes of history (extra minute for safety)
     const thirtyOneMinutesAgo = moment().subtract(31, 'minutes');
     while (btcPriceHistory.length > 0 && btcPriceHistory[0].timestamp.isBefore(thirtyOneMinutesAgo)) {
       btcPriceHistory.shift();
     }
 
     return price;
-  });
+  } catch (error) {
+    console.error('Error fetching BTC price:', error);
+    return null;
+  }
 };
 
 // Calculate BTC price changes
@@ -133,11 +115,13 @@ const calculateBTCChanges = async () => {
   const currentBTCPrice = await fetchBTCPrice();
   if (!currentBTCPrice) return { price: null, change: null, change30m: null };
 
+  // Calculate immediate change
   let priceChange = null;
   if (lastBTCPrice) {
     priceChange = ((currentBTCPrice - lastBTCPrice) / lastBTCPrice * 100).toFixed(2);
   }
 
+  // Calculate 30-minute change
   let priceChange30m = null;
   if (btcPriceHistory.length > 0) {
     const thirtyMinutesAgo = moment().subtract(30, 'minutes');
@@ -160,10 +144,10 @@ const logRSIAndPrice = (symbol, rsi15m, rsi5m, rsi1m, currentPrice) => {
   const timestamp = moment().format('YYYY-MM-DD HH:mm:ss');
   const logData = `${timestamp},${symbol},${rsi15m},${rsi5m},${rsi1m},${currentPrice}\n`;
 
-//  fs.appendFile(RSI_LOG_FILE, logData, (err) => {
-//    if (err) console.error('Error writing to RSI log file:', err);
-//    else console.log(`Logged RSI and price for ${symbol}`);
-//  });
+  fs.appendFile(RSI_LOG_FILE, logData, (err) => {
+    if (err) console.error('Error writing to RSI log file:', err);
+    else console.log(`Logged RSI and price for ${symbol}`);
+  });
 };
 
 // Log buy signals
@@ -195,6 +179,7 @@ export const handleRSI = async (symbol, token, chatIds) => {
   // Log RSI and price data
   logRSIAndPrice(symbol, rsi15m, rsi5m, rsi1m, currentPrice);
 
+  // Check for an existing signal
   const existingSignal = sellPrices[symbol];
   if (existingSignal) {
     if (
@@ -259,6 +244,7 @@ export const handleRSI = async (symbol, token, chatIds) => {
   }
 };
 
+// Check if sell target is achieved
 export const checkTargetAchieved = async (token, chatIds) => {
   for (const symbol in sellPrices) {
     const { sellPrice, entryPrices, messageId, buyTime } = sellPrices[symbol];
