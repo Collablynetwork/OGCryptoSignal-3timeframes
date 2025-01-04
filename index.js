@@ -31,8 +31,8 @@ const monitorTokens = async () => {
 // Main function
 const main = async () => {
   await monitorTokens();
-  setInterval(monitorTokens, 31000);
-  setInterval(() => checkTargetAchieved(TELEGRAM_TOKEN, CHAT_IDS), 31000); // Pass CHAT_IDS to checkTargetAchieved
+  setInterval(monitorTokens, 61000);
+  setInterval(() => checkTargetAchieved(TELEGRAM_TOKEN, CHAT_IDS), 61000); // Pass CHAT_IDS to checkTargetAchieved
 };
 
 // Start monitoring
